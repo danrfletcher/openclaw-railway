@@ -4,27 +4,38 @@
   "title": "Models Configuration",
   "description": "Custom model provider definitions",
   "type": "object",
-  "patternProperties": {
-    ".*": {
+  "properties": {
+    "mode": {
+      "type": "string",
+      "description": "How to merge with built-in providers (merge or replace)"
+    },
+    "providers": {
       "type": "object",
-      "properties": {
-        "provider": {
-          "type": "string",
-          "description": "Provider backend (openai-compatible, anthropic, etc.)"
-        },
-        "baseUrl": {
-          "type": "string",
-          "description": "API base URL",
-          "format": "uri"
-        },
-        "apiKey": {
-          "type": "string",
-          "description": "API key for this model provider"
-        },
-        "models": {
-          "type": "array",
-          "description": "Available model identifiers",
-          "items": { "type": "string" }
+      "description": "Provider definitions keyed by provider ID",
+      "patternProperties": {
+        ".*": {
+          "type": "object",
+          "properties": {
+            "baseUrl": { "type": "string", "description": "API base URL", "format": "uri" },
+            "apiKey": { "type": "string", "description": "API key for this provider" },
+            "api": { "type": "string", "description": "API type (openai-completions, anthropic-messages)" },
+            "models": {
+              "type": "array",
+              "description": "Model definitions",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string", "description": "Model identifier" },
+                  "name": { "type": "string", "description": "Display name" },
+                  "contextWindow": { "type": "number", "description": "Context window size in tokens" },
+                  "maxTokens": { "type": "number", "description": "Max output tokens per response" },
+                  "reasoning": { "type": "boolean", "description": "Whether model supports reasoning" }
+                },
+                "additionalProperties": true
+              }
+            }
+          },
+          "additionalProperties": true
         }
       },
       "additionalProperties": true

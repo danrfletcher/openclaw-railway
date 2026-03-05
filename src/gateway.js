@@ -475,16 +475,22 @@ export async function startGateway() {
     console.log('Wrote default TOOLS.md with environment tool notes');
   }
 
-  // Ensure custom openai-compatible providers have contextWindow set.
-  // When OpenClaw can't determine a model's context window (e.g. the model ID
-  // from Plano doesn't match its internal registry), it falls back to 4096 —
-  // below the 16000 minimum for agent operation. Setting contextWindow explicitly
-  // tells OpenClaw to use a 128K context window for these providers.
-  if (config.models && typeof config.models === 'object') {
-    for (const [key, provider] of Object.entries(config.models)) {
-      if (provider && provider.provider === 'openai-compatible' && (!provider.contextWindow || provider.contextWindow < 32000)) {
-        provider.contextWindow = 200000;
-        console.log(`Auto-set contextWindow=200000 for custom provider "${key}"`);
+  // Ensure custom provider models have adequate contextWindow.
+  // OpenClaw stores context windows per-model at config.models.providers.<key>.models[].contextWindow
+  // When the CLI creates a custom provider with an unknown model, contextWindow defaults to 4096 —
+  // below the 16000 minimum for agent operation.
+  const providers = config.models?.providers;
+  if (providers && typeof providers === 'object') {
+    for (const [key, providerEntry] of Object.entries(providers)) {
+      if (!providerEntry || !Array.isArray(providerEntry.models)) continue;
+      for (const model of providerEntry.models) {
+        if (model && typeof model === 'object' && model.id) {
+          const ctx = typeof model.contextWindow === 'number' ? model.contextWindow : 0;
+          if (!ctx || ctx < 32000) {
+            model.contextWindow = 200000;
+            console.log(`Auto-set contextWindow=200000 for model "${model.id}" in provider "${key}"`);
+          }
+        }
       }
     }
   }

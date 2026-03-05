@@ -583,24 +583,37 @@ app.post('/onboard/api/run', authMiddleware, async (req, res) => {
     }
 
     // Patch custom provider fields that the CLI doesn't handle (provider name, context window)
+    // OpenClaw stores providers at config.models.providers.<key> with models as array of objects
     const configFile = join(OPENCLAW_STATE_DIR, 'openclaw.json');
     if (existsSync(configFile) && extraFieldValues) {
       try {
         const config = JSON.parse(readFileSync(configFile, 'utf8'));
-        if (config.models) {
-          for (const [key, provider] of Object.entries(config.models)) {
-            if (provider && provider.provider === 'openai-compatible') {
-              const ctxVal = extraFieldValues['custom-context-window'];
-              if (ctxVal) {
-                provider.contextWindow = parseInt(ctxVal, 10);
-                logs.push(`Set contextWindow=${provider.contextWindow} for provider "${key}"`);
+        const cfgProviders = config.models?.providers;
+        if (cfgProviders && typeof cfgProviders === 'object') {
+          for (const [key, providerEntry] of Object.entries(cfgProviders)) {
+            if (!providerEntry || !Array.isArray(providerEntry.models)) continue;
+            // Set contextWindow on individual model entries
+            const ctxVal = extraFieldValues['custom-context-window'];
+            if (ctxVal) {
+              const ctxNum = parseInt(ctxVal, 10);
+              for (const model of providerEntry.models) {
+                if (model && typeof model === 'object' && model.id) {
+                  model.contextWindow = ctxNum;
+                  logs.push(`Set contextWindow=${ctxNum} for model "${model.id}" in provider "${key}"`);
+                }
               }
-              // Rename provider key if custom name provided
-              const newName = extraFieldValues['custom-provider-name']?.trim();
-              if (newName && newName !== key) {
-                config.models[newName] = provider;
-                delete config.models[key];
-                logs.push(`Renamed provider "${key}" → "${newName}"`);
+            }
+            // Rename provider key if custom name provided
+            const newName = extraFieldValues['custom-provider-name']?.trim();
+            if (newName && newName !== key) {
+              cfgProviders[newName] = providerEntry;
+              delete cfgProviders[key];
+              logs.push(`Renamed provider "${key}" → "${newName}"`);
+              // Also update agents.defaults.model.primary if it references the old provider key
+              const primary = config.agents?.defaults?.model?.primary;
+              if (primary && primary.startsWith(key + '/')) {
+                config.agents.defaults.model.primary = newName + '/' + primary.slice(key.length + 1);
+                logs.push(`Updated primary model ref: ${primary} → ${config.agents.defaults.model.primary}`);
               }
             }
           }
