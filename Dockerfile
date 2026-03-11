@@ -1,5 +1,5 @@
-# OpenClaw Railway Template
-# Optimized 2-stage build with npm install, optional features, and fast startup
+# OpenClaw Railway Template - Ultimate Headless Dev & Evolution Engine
+# Optimized for Next.js, Linear Integration, and Automated GitHub PRs
 
 # ==============================================================================
 # Stage 1: Build the wrapper server (with node-pty native module)
@@ -35,26 +35,43 @@ ARG SIGNAL_CLI_VERSION=0.13.24
 
 # Install base runtime dependencies
 # - tini: proper PID 1 handling for signal forwarding
-# - curl: health checks
+# - curl: health checks and script syncing
 # - ca-certificates: HTTPS requests
-# - git, python3, make, g++: required for npm install -g (in-app upgrades)
+# - git: REQUIRED for cloning repos to work on
+# - python3, python3-pip: REQUIRED for Evolution Engine and MCP servers
+# - iputils-ping, dnsutils: REQUIRED for networking troubleshooting (ping/dig)
+# - make, g++: required for native module builds during 'npm install'
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     curl \
     ca-certificates \
     git \
     python3 \
+    python3-pip \
     make \
     g++ \
+    iputils-ping \
+    dnsutils \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install OpenClaw from npm (pre-built, ~30-60s instead of ~12min source build)
-# Install to default /usr/local prefix BEFORE setting NPM_CONFIG_PREFIX to /data
-# so it's baked into the image and not hidden by the Railway volume mount.
+# 1. Install GitHub CLI (Essential for Headless PRs)
+RUN mkdir -p -m 755 /etc/apt/keyrings && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/list.d/github-cli.list > /dev/null && \
+    apt-get update && apt-get install gh -y
+
+# 2. Install Python 'requests' for the Evolution Engine
+RUN pip3 install --no-cache-dir --break-system-packages requests
+
+# 3. Install Global Node Tools (PM2 for background Next.js dev servers)
+RUN npm install -g npm@latest pm2
+
+# 4. Install OpenClaw from npm
 RUN npm install -g openclaw@${OPENCLAW_VERSION}
 
 # Optional: Install Java + signal-cli for Signal channel support
-# Set INSTALL_SIGNAL_CLI=true in Railway build args if needed
 RUN if [ "$INSTALL_SIGNAL_CLI" = "true" ]; then \
       apt-get update && apt-get install -y --no-install-recommends \
         openjdk-17-jre-headless \
@@ -72,10 +89,7 @@ RUN if [ "$INSTALL_SIGNAL_CLI" = "true" ]; then \
 RUN groupadd --system --gid 1001 openclaw && \
     useradd --system --uid 1001 --gid openclaw --shell /bin/bash --create-home openclaw
 
-# Create openclaw CLI wrapper that ALWAYS runs first (PATH-priority via /opt/openclaw-bin).
-# Injects OPENCLAW_GATEWAY_TOKEN so the CLI can authenticate with the gateway in ANY
-# shell context (docker exec, Railway shell, web terminal, scripts).
-# Delegates to the npm-upgraded version if available, otherwise the base npm install.
+# Create openclaw CLI wrapper that ALWAYS runs first
 RUN mkdir -p /opt/openclaw-bin && \
     printf '#!/bin/bash\n\
 if [ -z "$OPENCLAW_GATEWAY_TOKEN" ] && [ -f "${OPENCLAW_STATE_DIR:-/data/.openclaw}/gateway.token" ]; then\n\
@@ -93,7 +107,6 @@ exec node /usr/local/lib/node_modules/openclaw/dist/entry.js "$@"\n' > /opt/open
     chmod +x /opt/openclaw-bin/openclaw
 
 # Optional: Install Playwright Chromium for browser automation
-# Matches the playwright-core version that OpenClaw depends on
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN if [ "$INSTALL_BROWSER" = "true" ]; then \
       PW_VER=$(node -e "try{console.log(require('/usr/local/lib/node_modules/openclaw/node_modules/playwright-core/package.json').version)}catch(e){console.log('latest')}" 2>/dev/null) && \
@@ -125,23 +138,15 @@ RUN chmod +x /entrypoint.sh
 # Copy pre-bundled skills (Railway-optimized)
 COPY skills/ /bundled-skills/
 
-# Create data directory with proper permissions
-RUN mkdir -p /data/.openclaw /data/workspace && \
-    chmod 700 /data/.openclaw /data/workspace && \
+# Create data directory structure for Git-Ops and Persistence
+RUN mkdir -p /data/.openclaw /data/workspace /data/scripts && \
+    chmod 700 /data/.openclaw /data/workspace /data/scripts && \
     chown -R openclaw:openclaw /data /app
-
-# Note: No VOLUME directive — Railway manages volumes externally
-# Note: Running as root because Railway volumes mount as root.
-# The entrypoint handles dropping privileges after fixing permissions.
 
 # Default port (Railway overrides via PORT env var)
 EXPOSE 8080
 
 # Environment defaults
-# NPM_CONFIG_PREFIX on the persistent volume so in-app upgrades survive restarts.
-# PATH order: /opt/openclaw-bin (token-injecting wrapper) > /data/.npm-global/bin
-# (npm upgrades) > system defaults.  The wrapper delegates to the npm-upgraded
-# entry.js when available, so the upgraded code still runs.
 ENV NODE_ENV=production \
     HOME=/home/openclaw \
     OPENCLAW_STATE_DIR=/data/.openclaw \
@@ -151,7 +156,7 @@ ENV NODE_ENV=production \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PATH=/opt/openclaw-bin:/data/.npm-global/bin:$PATH
 
-# Health check - checks wrapper server health endpoint
+# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8080}/health || exit 1
 
