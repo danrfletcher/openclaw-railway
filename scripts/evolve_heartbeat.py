@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Heartbeat Evolution Engine
-Optimized for Artificial Analysis V2 API Schema.
+Optimized for Artificial Analysis V2 API Schema with Top 5 Fallback Chain.
 """
 
 import json
@@ -61,7 +61,6 @@ def fetch_aa_benchmarks(api_key):
     headers = {"User-Agent": "Mozilla/5.0", "x-api-key": api_key}
     response = fetch_json(ARTIFICIAL_ANALYSIS_URL, headers=headers)
     
-    # Based on Pasted.txt, data is in response['data']
     if response and isinstance(response, dict) and "data" in response:
         log(f"Successfully retrieved {len(response['data'])} benchmarks from AA.")
         return response["data"]
@@ -82,7 +81,6 @@ def find_best_match(or_model, aa_models):
         aa_name_norm = normalize(aa_name)
         aa_slug_norm = normalize(aa_slug)
         
-        # Match against OpenRouter ID or Name
         if aa_name_norm and (aa_name_norm in or_id_norm or aa_name_norm in or_name_norm or or_name_norm in aa_name_norm):
             return aa
         if aa_slug_norm and (aa_slug_norm in or_id_norm):
@@ -92,14 +90,13 @@ def find_best_match(or_model, aa_models):
 def score_model(or_model, aa_entry):
     evals = aa_entry.get("evaluations", {})
     
-    # Extract scores from the specific AA schema
-    iq = float(evals.get("artificial_analysis_intelligence_index") or 0)
-    coding = float(evals.get("artificial_analysis_coding_index") or 0)
+    try:
+        iq = float(evals.get("artificial_analysis_intelligence_index") or 0)
+        coding = float(evals.get("artificial_analysis_coding_index") or 0)
+    except (ValueError, TypeError):
+        iq, coding = 0, 0
     
-    # Composite: 70% General IQ, 30% Coding
     base_score = (iq * 0.7) + (coding * 0.3)
-    
-    # Context Bonus (up to 5 points)
     context_bonus = (min(or_model["context_length"], 128000) / 128000) * 5
     
     return round(base_score + context_bonus, 2), iq
@@ -122,22 +119,27 @@ def main():
         match = find_best_match(model, aa_benchmarks)
         if match:
             score, iq = score_model(model, match)
-            scored_list.append({"id": model["id"], "score": score, "iq": iq})
-            log(f"  Matched: {model['id']} -> IQ: {iq}, Final Score: {score}")
+            if score > 0:
+                scored_list.append({"id": model["id"], "score": score, "iq": iq})
+                log(f"  Matched: {model['id']} -> IQ: {iq}, Final Score: {score}")
 
     if not scored_list:
         log("No benchmark matches found. Defaulting to baseline.")
-        print("google/gemini-flash-1.5")
+        print("FINAL_MODEL_LIST: google/gemini-flash-1.5")
         return
 
     # Sort by score descending
     scored_list.sort(key=lambda x: x["score"], reverse=True)
-    winner = scored_list[0]
     
-    log(f"WINNER: {winner['id']} (Score: {winner['score']})")
+    # Extract Top 5 for the fallback chain
+    top_5_models = [item["id"] for item in scored_list[:5]]
+    fallback_chain = ",".join(top_5_models)
     
-    # Final output for CLI consumption
-    print(winner["id"])
+    log(f"WINNER: {top_5_models[0]} (Score: {scored_list[0]['score']})")
+    log(f"FALLBACK CHAIN: {fallback_chain}")
+    
+    # Final output for OpenClaw Agent consumption
+    print(f"FINAL_MODEL_LIST: {fallback_chain}")
 
 if __name__ == "__main__":
     main()
