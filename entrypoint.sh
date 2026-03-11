@@ -192,6 +192,18 @@ if [ -d "/bundled-skills" ]; then
     done
 fi
 
+# ==============================================================================
+# NEW: AUTO-MIGRATE CONFIG
+# ==============================================================================
+if [ -f "$OPENCLAW_STATE_DIR/openclaw.json" ]; then
+    echo "Migrating OpenClaw configuration..."
+    if [ "$(id -u)" = "0" ]; then
+        su -s /bin/bash openclaw -c "openclaw doctor --fix" || echo "Doctor finished with warnings"
+    else
+        openclaw doctor --fix || echo "Doctor finished with warnings"
+    fi
+fi
+
 # Log startup info
 echo ""
 echo "OpenClaw Railway Template"
