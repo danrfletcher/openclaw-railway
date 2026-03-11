@@ -34,13 +34,6 @@ ARG INSTALL_BROWSER=true
 ARG SIGNAL_CLI_VERSION=0.13.24
 
 # Install base runtime dependencies
-# - tini: proper PID 1 handling for signal forwarding
-# - curl: health checks and script syncing
-# - ca-certificates: HTTPS requests
-# - git: REQUIRED for cloning repos to work on
-# - python3, python3-pip: REQUIRED for Evolution Engine and MCP servers
-# - iputils-ping, dnsutils: REQUIRED for networking troubleshooting (ping/dig)
-# - make, g++: required for native module builds during 'npm install'
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     curl \
@@ -55,23 +48,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# 1. Install GitHub CLI (Essential for Headless PRs)
-RUN mkdir -p -m 755 /etc/apt/keyrings && \
+# 1. Install GitHub CLI (Fixed directory creation)
+RUN mkdir -p -m 755 /etc/apt/keyrings /etc/apt/sources.list.d && \
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && \
     chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/list.d/github-cli.list > /dev/null && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
     apt-get update && apt-get install gh -y
 
 # 2. Install Python 'requests' for the Evolution Engine
 RUN pip3 install --no-cache-dir --break-system-packages requests
 
-# 3. Install Global Node Tools (PM2 for background Next.js dev servers)
+# 3. Install Global Node Tools
 RUN npm install -g npm@latest pm2
 
 # 4. Install OpenClaw from npm
 RUN npm install -g openclaw@${OPENCLAW_VERSION}
 
-# Optional: Install Java + signal-cli for Signal channel support
+# Optional: Install Java + signal-cli
 RUN if [ "$INSTALL_SIGNAL_CLI" = "true" ]; then \
       apt-get update && apt-get install -y --no-install-recommends \
         openjdk-17-jre-headless \
@@ -82,14 +75,14 @@ RUN if [ "$INSTALL_SIGNAL_CLI" = "true" ]; then \
       && ln -sf /opt/signal-cli-${SIGNAL_CLI_VERSION}/bin/signal-cli /usr/local/bin/signal-cli \
       && rm /tmp/signal-cli.tar.gz; \
     else \
-      echo "Skipping signal-cli (set INSTALL_SIGNAL_CLI=true to enable)"; \
+      echo "Skipping signal-cli"; \
     fi
 
-# Create non-root user for security
+# Create non-root user
 RUN groupadd --system --gid 1001 openclaw && \
     useradd --system --uid 1001 --gid openclaw --shell /bin/bash --create-home openclaw
 
-# Create openclaw CLI wrapper that ALWAYS runs first
+# Create openclaw CLI wrapper
 RUN mkdir -p /opt/openclaw-bin && \
     printf '#!/bin/bash\n\
 if [ -z "$OPENCLAW_GATEWAY_TOKEN" ] && [ -f "${OPENCLAW_STATE_DIR:-/data/.openclaw}/gateway.token" ]; then\n\
@@ -106,22 +99,14 @@ fi\n\
 exec node /usr/local/lib/node_modules/openclaw/dist/entry.js "$@"\n' > /opt/openclaw-bin/openclaw && \
     chmod +x /opt/openclaw-bin/openclaw
 
-# Optional: Install Playwright Chromium for browser automation
+# Optional: Install Playwright Chromium
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN if [ "$INSTALL_BROWSER" = "true" ]; then \
       PW_VER=$(node -e "try{console.log(require('/usr/local/lib/node_modules/openclaw/node_modules/playwright-core/package.json').version)}catch(e){console.log('latest')}" 2>/dev/null) && \
-      echo "Installing playwright@${PW_VER} chromium..." && \
       npx -y playwright@${PW_VER} install --with-deps chromium && \
-      chmod -R o+rx /ms-playwright && \
-      CHROME_BIN=$(find /ms-playwright -name "chrome" -type f \( -path "*/chrome-linux/*" -o -path "*/chrome-linux64/*" \) 2>/dev/null | head -1) && \
-      if [ -n "$CHROME_BIN" ]; then \
-        ln -sf "$CHROME_BIN" /usr/local/bin/chromium && \
-        echo "Symlinked $CHROME_BIN -> /usr/local/bin/chromium"; \
-      else \
-        echo "WARNING: Playwright chrome binary not found for symlink"; \
-      fi; \
+      chmod -R o+rx /ms-playwright; \
     else \
-      echo "Skipping Playwright/Chromium (set INSTALL_BROWSER=true to enable)"; \
+      echo "Skipping Playwright"; \
     fi
 
 WORKDIR /app
@@ -135,15 +120,15 @@ COPY --from=wrapper-builder /app/package.json ./package.json
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Copy pre-bundled skills (Railway-optimized)
+# Copy pre-bundled skills
 COPY skills/ /bundled-skills/
 
-# Create data directory structure for Git-Ops and Persistence
+# Create data directory structure
 RUN mkdir -p /data/.openclaw /data/workspace /data/scripts && \
     chmod 700 /data/.openclaw /data/workspace /data/scripts && \
     chown -R openclaw:openclaw /data /app
 
-# Default port (Railway overrides via PORT env var)
+# Default port
 EXPOSE 8080
 
 # Environment defaults
@@ -160,5 +145,5 @@ ENV NODE_ENV=production \
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8080}/health || exit 1
 
-# Use tini as init system for proper signal handling
+# Use tini as init system
 ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
